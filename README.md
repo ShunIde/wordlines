@@ -80,7 +80,10 @@ index.html   page structure
 styles.css   styling; colors are set as variables, with light and dark themes
 app.js       indexing, search, relationship logic, tree layout and drawing
 data.js      word-family trees and language-family list
-backend/import_dump.py   Phase 1: Wiktextract dump → SQLite
+backend/import_dump.py       Phase 1: Wiktextract dump → SQLite
+backend/fetch_languages.py   language names, families and extinct status → data/languages.json
+backend/trees.py             builds a word's family tree (same node shape as data.js) and search
+backend/server.py            local server: the page plus /api/search and /api/tree
 ```
 
 Each node in `data.js` is created with `T(word, romanization, language, family, meaning, options, children)`. The options are:
@@ -101,6 +104,21 @@ python backend/import_dump.py --all        # everything
 ```
 
 This builds `data/wordlines.db`, a SQLite file with `entries` (words with gloss and part of speech) and `edges` (parent → child links marked `inh`, `bor`, `der` or `unc`). Links come from each entry's etymology templates and its Descendants section. `data/` is gitignored.
+
+Then fetch language names, families and extinct status (from Wiktionary's language data and Wikidata), and start the local server:
+
+```
+python backend/fetch_languages.py          # writes data/languages.json
+python backend/server.py                   # open http://localhost:8000
+```
+
+Served this way, search covers every imported word and trees are built on demand. Opening `index.html` directly still shows the four hand-curated Phase 0 families.
+
+Known limitations of the live data so far:
+- No dates or notes. Those exist only in the curated families.
+- Words are identified by language and spelling, so homonyms can share a node. For example, Middle English *mede* means both "mead" and "meadow". The ancestor path follows the chain stated on the word's own page, which keeps it accurate, but side branches can pick up a homonym's descendants.
+- Families larger than 700 words are trimmed to the 700 nearest the searched word's path.
+- Words in languages that weren't imported (for example Mandarin 蜜 in the default subset) only appear inside other words' Descendants lists, without a gloss.
 
 ## Roadmap
 

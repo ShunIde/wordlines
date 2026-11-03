@@ -9,11 +9,18 @@
   const slug = (s) => norm(s).replace(/[^\p{L}\p{N}]+/gu, "-").replace(/^-+|-+$/g, "");
   const famName = (f) => (FAMILIES[f] || { name: f }).name;
   const REL = { inh: "inherited", bor: "borrowed", unc: "uncertain link" };
+  const quoted = (g) => (g ? `“${esc(g)}”` : "");
+
+  // Served by backend/server.py: search and trees come from the Wiktionary database.
+  // Opened as a file: only the hand-curated families in data.js are available.
+  const LIVE = location.protocol.startsWith("http");
+  const liveTarget = (lc, k) => `w/${lc}/${k}`;
+  const targetOf = (n) => (n.ds.live ? liveTarget(n.lc, n.k) : n.id);
 
   /* ------------------------------------------------------------ indexing */
   const byId = new Map();
   const all = [];
-  for (const ds of DATA) {
+  function indexDataset(ds) {
     ds.nodes = [];
     const walk = (n, parent, depth) => {
       n.ds = ds; n.parent = parent; n.depth = depth;
@@ -23,11 +30,31 @@
       let id = base, k = 2;
       while (byId.has(id)) id = `${base}-${k++}`;
       n.id = id;
-      byId.set(id, n); all.push(n); ds.nodes.push(n);
+      byId.set(id, n); ds.nodes.push(n);
+      if (!ds.live) all.push(n);
       n.c.forEach((ch) => walk(ch, n, depth + 1));
     };
     walk(ds.tree, null, 0);
-    ds.featuredNode = ds.nodes.find((n) => n.l === ds.featured.l && n.w === ds.featured.w) || ds.tree;
+    ds.featuredNode = ds.nodes.find((n) => n.target)
+      || ds.nodes.find((n) => n.l === ds.featured.l && n.w === ds.featured.w) || ds.tree;
+  }
+  DATA.forEach(indexDataset);
+
+  const liveCache = new Map();
+  let liveCount = 0;
+  async function loadLive(lc, k) {
+    const key = liveTarget(lc, k);
+    if (!liveCache.has(key)) {
+      liveCache.set(key, fetch(`/api/tree?lang=${encodeURIComponent(lc)}&word=${encodeURIComponent(k)}`).then(async (res) => {
+        if (!res.ok) return null;
+        const data = await res.json();
+        Object.assign(FAMILIES, data.families);
+        const ds = { id: `live${++liveCount}`, live: true, title: data.title, truncated: data.truncated, tree: data.tree, featured: {} };
+        indexDataset(ds);
+        return ds;
+      }).catch((err) => { liveCache.delete(key); throw err; }));
+    }
+    return liveCache.get(key);
   }
 
   const ancestors = (n) => { const a = []; for (let p = n; p; p = p.parent) a.push(p); return a; };
@@ -66,23 +93,43 @@
       if (s < 99) scored.push([s, n.x ? 1 : 0, n]);
     }
     scored.sort((a, b) => a[0] - b[0] || a[1] - b[1] || a[2].l.localeCompare(b[2].l));
-    return scored.slice(0, 9).map((r) => r[2]);
+    return scored.slice(0, 9).map((r) => ({ ...r[2], target: r[2].id, extra: `${r[2].ds.title} family` }));
   }
 
-  function renderResults() {
+  let searchSeq = 0;
+  async function liveSearch(text) {
+    const res = await fetch(`/api/search?q=${encodeURIComponent(text)}`);
+    if (!res.ok) throw new Error(`search failed: ${res.status}`);
+    return (await res.json()).map((h) => ({ ...h, target: liveTarget(h.lc, h.k), extra: "" }));
+  }
+
+  async function renderResults() {
     const text = q.value.trim();
     if (!text) { closeResults(); return; }
-    hits = search(text);
+    const seq = ++searchSeq;
+    let found, failed = false;
+    if (LIVE) {
+      try { found = await liveSearch(text); } catch (e) { found = []; failed = true; }
+      if (seq !== searchSeq) return; // a newer keystroke already answered
+    } else {
+      found = search(text);
+    }
+    hits = found;
     active = hits.length ? 0 : -1;
+    const empty = failed
+      ? "Couldn't reach the Wordlines server. Is <code>backend/server.py</code> still running?"
+      : LIVE
+        ? "No match in the imported Wiktionary data. Try another spelling, or import more languages."
+        : `No match in this prototype yet. It currently covers the <b>honey</b>, <b>tea</b>, <b>orange</b> and <b>wine</b> word families, about ${all.length} words in total.`;
     results.innerHTML = hits.length
       ? hits.map((n, i) => `
-        <li role="option" id="opt-${i}" data-target="${esc(n.id)}" aria-selected="${i === active}">
+        <li role="option" id="opt-${i}" data-target="${esc(n.target)}" aria-selected="${i === active}">
           <span class="dot fam-${n.f}${n.x ? " hollow" : ""}"></span>
           <span class="rw">${esc(n.w)}${n.r ? `<span class="r">${esc(n.r)}</span>` : ""}</span>
-          <span class="rm">${esc(n.l)}${n.x ? " †" : ""} · “${esc(n.g)}”</span>
-          <span class="rds">${esc(n.ds.title)} family</span>
+          <span class="rm">${esc(n.l)}${n.x ? " †" : ""}${n.g ? ` · ${quoted(n.g)}` : ""}</span>
+          ${n.extra ? `<span class="rds">${esc(n.extra)}</span>` : ""}
         </li>`).join("")
-      : `<li class="empty">No match in this prototype yet. It currently covers the <b>honey</b>, <b>tea</b>, <b>orange</b> and <b>wine</b> word families, about ${all.length} words in total.</li>`;
+      : `<li class="empty">${empty}</li>`;
     results.hidden = false;
     q.setAttribute("aria-expanded", "true");
     q.setAttribute("aria-activedescendant", active >= 0 ? `opt-${active}` : "");
@@ -101,7 +148,7 @@
   q.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); moveActive(1); }
     else if (e.key === "ArrowUp") { e.preventDefault(); moveActive(-1); }
-    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); go(hits[active].id); }
+    else if (e.key === "Enter" && active >= 0) { e.preventDefault(); go(hits[active].target); }
     else if (e.key === "Escape") { closeResults(); q.blur(); }
   });
   document.addEventListener("click", (e) => { if (!$("#search").contains(e.target)) closeResults(); });
@@ -117,13 +164,37 @@
     const h = "#" + encodeURIComponent(id);
     if (location.hash === h) route(); else location.hash = h;
   }
-  function route() {
+  let routeSeq = 0;
+  async function route() {
+    const seq = ++routeSeq;
     const id = decodeURIComponent(location.hash.slice(1));
-    const n = byId.get(id);
+    let n = byId.get(id);
+    const live = id.match(/^w\/([^/]+)\/(.+)$/);
+    if (!n && live && LIVE) {
+      q.value = live[2];
+      q.blur();
+      document.body.classList.add("loading");
+      let ds = null, failed = false;
+      try { ds = await loadLive(live[1], live[2]); } catch (e) { failed = true; }
+      document.body.classList.remove("loading");
+      if (seq !== routeSeq) return; // the user navigated elsewhere while this loaded
+      if (!ds) {
+        showLanding();
+        q.focus();
+        renderNotice(failed ? "Couldn't reach the Wordlines server. Is <code>backend/server.py</code> still running?"
+          : `No etymology data for <b>${esc(live[2])}</b> yet.`);
+        return;
+      }
+      n = ds.featuredNode;
+    }
     if (!n) { showLanding(); return; }
     q.value = n.w;
     q.blur();
     showResult(n);
+  }
+  function renderNotice(html) {
+    results.innerHTML = `<li class="empty">${html}</li>`;
+    results.hidden = false;
   }
   window.addEventListener("hashchange", route);
   $("#home").addEventListener("click", () => { history.pushState("", "", location.pathname + location.search); q.value = ""; showLanding(); });
@@ -178,12 +249,12 @@
     const famSorted = [...s.fams].sort((a, b) => b[1] - a[1]);
     const rootLine = t === root
       ? `This is the <b>oldest traceable form</b> of the word${root.d ? ` · ${esc(root.d)}` : ""}.`
-      : `Oldest traceable ancestor: <button class="link-btn" data-focus="${esc(root.id)}">${esc(root.w)}</button> <b>${esc(root.l)}</b> “${esc(root.g)}”${root.d ? ` · ${esc(root.d)}` : ""}`;
+      : `Oldest traceable ancestor: <button class="link-btn" data-focus="${esc(root.id)}">${esc(root.w)}</button> <b>${esc(root.l)}</b> ${quoted(root.g)}${root.d ? ` · ${esc(root.d)}` : ""}`;
     $("#summary").innerHTML = `
       <div class="sum-main fam-${t.f}">
         <div class="eyebrow"><span class="dot${t.x ? " hollow" : ""}"></span>${esc(t.l)}${t.x ? " (extinct)" : ""} · ${esc(famName(t.f))}</div>
         <h1 class="big-word">${esc(t.w)}${t.r ? `<span class="big-roman">${esc(t.r)}</span>` : ""}</h1>
-        <p class="gloss">“${esc(t.g)}”</p>
+        ${t.g ? `<p class="gloss">${quoted(t.g)}</p>` : ""}
         <div class="root-line">${rootLine}</div>
       </div>
       <div class="sum-stats">
@@ -274,7 +345,9 @@
     const z = state.zoom;
     $("#tree-scroll").innerHTML = `<svg width="${W * z}" height="${H * z}" viewBox="0 0 ${W} ${H}" role="img" aria-label="Family tree of ${esc(t.ds.title)} words">
       <g>${links.map((l) => l.svg).join("")}</g><g>${nodeSvg}</g></svg>`;
-    $("#tree-title").textContent = `The ${t.ds.title.toLowerCase()} family tree`;
+    $("#tree-title").textContent = t.ds.live
+      ? `The ${t.ds.title} family tree${t.ds.truncated ? ` (first ${t.ds.nodes.length} words)` : ""}`
+      : `The ${t.ds.title.toLowerCase()} family tree`;
     treeGeom = { pos: new Map(nodes.map((d) => [d.node, d])), W, H };
     $("#zreset").textContent = Math.round(z * 100) + "%";
     if (recenter) scrollTreeTo(t, false);
@@ -347,7 +420,7 @@
         <h2 class="dw">${esc(n.w)}${n.r ? `<i>${esc(n.r)}</i>` : ""}</h2>
       </div>
       <div class="dl fam-${n.f}"><span class="dot${n.x ? " hollow" : ""}"></span><b>${esc(n.l)}</b> · ${esc(famName(n.f))}</div>
-      <p class="dg">“${esc(n.g)}”</p>
+      ${n.g ? `<p class="dg">${quoted(n.g)}</p>` : ""}
       <div class="badges">
         ${n.x ? `<span class="badge">${n.l.startsWith("Proto-") ? "Reconstructed †" : "Extinct †"}</span>` : `<span class="badge living">● Living language</span>`}
         ${n.d ? `<span class="badge">${esc(n.d)}</span>` : ""}
@@ -357,14 +430,14 @@
       ${p ? `<div class="from">${n.rel === "bor" ? "Borrowed from" : n.rel === "unc" ? "Connected to" : "Inherited from"} <button class="link-btn" data-focus="${esc(p.id)}">${esc(p.w)}</button> (${esc(p.l)})</div>` : ""}
       ${n.note ? `<p class="note">${esc(n.note)}</p>` : ""}
       ${n.c.length ? `<div><div class="sub">Gave rise to</div><div class="kids">${n.c.map((c) => `<button class="chip fam-${c.f}" data-focus="${esc(c.id)}"><span class="dot${c.x ? " hollow" : ""}"></span>${esc(c.w)} <span class="muted">${esc(c.l)}</span></button>`).join("")}</div></div>` : ""}
-      ${n !== t ? `<button class="btn primary" data-target="${esc(n.id)}">Make this my word →</button>` : ""}`;
+      ${n !== t ? `<button class="btn primary" data-target="${esc(targetOf(n))}">Make this my word →</button>` : ""}`;
   }
 
   /* ------------------------------------------------------------- related */
   function renderRelated() {
     const t = state.target, s = livingStats(t);
     const sortFn = (a, b) => famName(a.f).localeCompare(famName(b.f)) || a.l.localeCompare(b.l);
-    const chip = (n) => `<button class="chip fam-${n.f}" data-focus="${esc(n.id)}" title="${esc(n.l)}: “${esc(n.g)}”"><span class="dot"></span>${esc(n.w)}${n.r ? ` <i class="muted">${esc(n.r)}</i>` : ""} <span class="muted">· ${esc(n.l)}</span></button>`;
+    const chip = (n) => `<button class="chip fam-${n.f}" data-focus="${esc(n.id)}" title="${esc(n.l)}${n.g ? `: “${esc(n.g)}”` : ""}"><span class="dot"></span>${esc(n.w)}${n.r ? ` <i class="muted">${esc(n.r)}</i>` : ""} <span class="muted">· ${esc(n.l)}</span></button>`;
     $("#related").innerHTML = `
       <div class="card-head"><h2>Related words alive today</h2><p>Click any word to find it in the tree</p></div>
       <div class="rel-cols">

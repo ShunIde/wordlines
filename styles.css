@@ -54,6 +54,8 @@
   color-scheme: dark;
 }
 
+/* Families without a colour of their own (live data covers hundreds) fall back to grey. */
+[class*="fam-"] { --c: var(--faint); }
 .fam-ie { --c: var(--fam-ie); } .fam-st { --c: var(--fam-st); } .fam-ural { --c: var(--fam-ural); }
 .fam-jap { --c: var(--fam-jap); } .fam-kor { --c: var(--fam-kor); } .fam-aa { --c: var(--fam-aa); }
 .fam-afro { --c: var(--fam-afro); } .fam-kart { --c: var(--fam-kart); } .fam-turk { --c: var(--fam-turk); }
@@ -292,3 +294,5 @@ footer { color: var(--faint); font-size: 13px; padding: 26px 0 40px; border-top:
   .hero { padding-top: 24px; }
 }
 @media (prefers-reduced-motion: reduce) { * { transition: none !important; scroll-behavior: auto !important; } }
+
+body.loading, body.loading * { cursor: progress; }

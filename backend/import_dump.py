@@ -98,10 +98,17 @@ def etymon_parent(args):
 
 
 def ancestor_chain(rec):
-    """Ancestors named in the etymology, nearest first, as [(rel, lang, term)]."""
+    """Ancestors named in the etymology, nearest first, as [(rel, lang, term)].
+
+    Consecutive lineage templates only form a chain when the text between them says so: "X, from Y"
+    is a chain, but "X + Y" is a compound (both are parts, neither is the other's ancestor), and
+    anything else ("X and Y", a new sentence) ends the chain.
+    """
     lang = rec["lang_code"]
+    text = rec.get("etymology_text") or ""
     chain = []
     etymon = None
+    end = 0  # where the previous chain link's expansion ends in `text`
     for t in rec.get("etymology_templates", []):
         name, args = t.get("name"), t.get("args", {})
         if name == "etymon" and etymon is None and args.get("1") == lang:
@@ -112,9 +119,31 @@ def ancestor_chain(rec):
             src, term = args.get("2"), clean(args.get("3") or "")
             if not src or not term or term == "-":
                 continue
+            expansion = t.get("expansion") or ""
+            at = text.find(expansion, end) if expansion else -1
+            if chain:
+                between = text[end:at] if at >= 0 else ""
+                if "+" in between:
+                    if len(chain) == 1:
+                        return []  # the word itself is a compound: it has no single parent
+                    chain.pop()  # the previous link was one part of a compound
+                    end = -1
+                    break
+                if at < 0 or "from" not in between.lower():
+                    break
+            if not chain and at > 0 and text[:at].rstrip().endswith("+"):
+                return []  # "X + Y" where only Y is a lineage template: still a compound
+            if at >= 0:
+                end = at + len(expansion)
             if chain and (chain[-1][1], loose_key(chain[-1][2])) == (src, loose_key(term)):
                 continue
             chain.append((LINEAGE[name], src, term))
+    # The last link may still be the first part of a compound ("..., from X + Y" with Y not a lineage
+    # template). end == -1 means a compound was already found and handled above.
+    if chain and end >= 0 and text[end:end + 40].lstrip().startswith("+"):
+        chain.pop()
+        if not chain:
+            return []
     # `etymon` is the newer, more precise template: prefer its link type for the direct parent.
     if etymon:
         rel, src, term = etymon
@@ -149,7 +178,7 @@ def descendant_edges(parent_lang, parent_word, items, languages, out):
         if rel is None:
             continue
         word = clean(word)
-        out.append((parent_lang, parent_word, code, word, rel, "desc"))
+        out.append((parent_lang, parent_word, code, word, rel, "desc", item.get("roman")))
         descendant_edges(code, word, item.get("descendants", []), languages, out)
 
 
@@ -172,6 +201,7 @@ CREATE TABLE edges (
     child_lang TEXT NOT NULL,
     child_word TEXT NOT NULL,
     child_key TEXT NOT NULL,
+    child_roman TEXT,           -- romanization given alongside the child word, if any
     rel TEXT NOT NULL,          -- inh | bor | der | unc
     source TEXT NOT NULL,       -- etym | etym-chain | desc
     entry_id INTEGER NOT NULL,  -- the entry whose page stated this link
@@ -184,6 +214,7 @@ CREATE INDEX entries_word ON entries (lang_code, word);
 CREATE INDEX entries_key ON entries (word_key, lang_code);
 CREATE INDEX edges_child ON edges (child_lang, child_key);
 CREATE INDEX edges_parent ON edges (parent_lang, parent_key);
+CREATE INDEX edges_child_key ON edges (child_key);
 """
 
 
@@ -207,9 +238,9 @@ def run(dump, db, langs):
     def flush():
         con.executemany("INSERT INTO entries VALUES (?,?,?,?,?,?,?,?)", entry_rows)
         con.executemany(
-            "INSERT OR IGNORE INTO edges VALUES (?,?,?,?,?,?,?,?,?)",
-            [(pl, pw, loose_key(pw), cl, cw, loose_key(cw), rel, src, eid)
-             for pl, pw, cl, cw, rel, src, eid in edge_rows],
+            "INSERT OR IGNORE INTO edges VALUES (?,?,?,?,?,?,?,?,?,?)",
+            [(pl, pw, loose_key(pw), cl, cw, loose_key(cw), roman, rel, src, eid)
+             for pl, pw, cl, cw, rel, src, roman, eid in edge_rows],
         )
         entry_rows.clear()
         edge_rows.clear()
@@ -233,7 +264,7 @@ def run(dump, db, langs):
                 child_lang, child_word = code, word
                 for i, (rel, src, term) in enumerate(ancestor_chain(rec)):
                     edge_rows.append((src, term, child_lang, child_word, rel,
-                                      "etym" if i == 0 else "etym-chain", entry_id))
+                                      "etym" if i == 0 else "etym-chain", None, entry_id))
                     child_lang, child_word = src, term
 
                 desc = []
