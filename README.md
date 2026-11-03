@@ -80,6 +80,7 @@ index.html   page structure
 styles.css   styling; colors are set as variables, with light and dark themes
 app.js       indexing, search, relationship logic, tree layout and drawing
 data.js      word-family trees and language-family list
+backend/import_dump.py   Phase 1: Wiktextract dump → SQLite
 ```
 
 Each node in `data.js` is created with `T(word, romanization, language, family, meaning, options, children)`. The options are:
@@ -87,6 +88,19 @@ Each node in `data.js` is created with `T(word, romanization, language, family, 
 - `rel`: how the word came from its parent, either `"inh"` (inherited), `"bor"` (borrowed) or `"unc"` (uncertain)
 - `d`: approximate date
 - `note`: a short explanation
+
+## Phase 1 data import (in progress)
+
+Phase 1 reads etymologies from [Wiktextract](https://github.com/tatuylonen/wiktextract)'s parsed English Wiktionary, published at [kaikki.org](https://kaikki.org/dictionary/rawdata.html). No scraping is involved. Wiktionary content is licensed CC BY-SA.
+
+```
+curl -o data/raw-wiktextract-data.jsonl.gz https://kaikki.org/dictionary/raw-wiktextract-data.jsonl.gz   # ~3 GB
+python backend/import_dump.py              # English, Middle/Old English, Latin, Ancient Greek + all proto-languages
+python backend/import_dump.py --langs en fr de zh    # a different subset (proto-languages are always kept)
+python backend/import_dump.py --all        # everything
+```
+
+This builds `data/wordlines.db`, a SQLite file with `entries` (words with gloss and part of speech) and `edges` (parent → child links marked `inh`, `bor`, `der` or `unc`). Links come from each entry's etymology templates and its Descendants section. `data/` is gitignored.
 
 ## Roadmap
 
