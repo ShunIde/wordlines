@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Wordlines</title>
+  <meta name="description" content="Enter a word and see which living languages share it, how it got there, and the ancestor it came from.">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,600;9..144,650&family=Inter:ital,wght@0,400;0,500;0,600;0,700;1,400&display=swap" rel="stylesheet">
+  <link rel="stylesheet" href="styles.css">
+  <script>
+    try { const t = localStorage.getItem("wordlines-theme"); if (t) document.documentElement.dataset.theme = t; } catch (e) {}
+  </script>
+</head>
+<body>
+  <div class="wrap">
+    <header class="topbar">
+      <button class="brand" id="home" aria-label="Wordlines home">
+        <svg width="26" height="26" viewBox="0 0 26 26" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true">
+          <circle cx="4.5" cy="13" r="2.6" fill="currentColor" stroke="none"/>
+          <path d="M7 13c6 0 6-7.5 12-7.5M7 13h12M7 13c6 0 6 7.5 12 7.5"/>
+          <circle cx="21" cy="5.5" r="2.2"/><circle cx="21" cy="13" r="2.2"/><circle cx="21" cy="20.5" r="2.2" stroke-dasharray="2 2"/>
+        </svg>
+        Wordlines
+      </button>
+      <button class="icon-btn" id="theme" aria-label="Toggle dark mode" title="Toggle dark mode">
+        <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg>
+      </button>
+    </header>
+
+    <section class="hero">
+      <h1>Where did a word <em>come from</em>, and where did it go?</h1>
+      <p class="sub">Type a word in any language. Wordlines traces it back to its oldest known ancestor and shows every living language that still uses a relative of it.</p>
+
+      <div class="search" id="search">
+        <label class="visually-hidden" for="q">Search for a word</label>
+        <div class="search-box">
+          <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" aria-hidden="true"><circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/></svg>
+          <input id="q" type="text" autocomplete="off" spellcheck="false" placeholder="Try 蜜, mead, chai, naranja, вино…"
+                 role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list">
+          <span class="kbd">/</span>
+        </div>
+        <ul class="results" id="results" role="listbox" hidden></ul>
+      </div>
+      <div class="try" id="try"></div>
+    </section>
+
+    <main>
+      <section id="landing">
+        <div class="section-title">Explore a word family</div>
+        <div class="stories" id="stories"></div>
+
+        <div class="section-title">How to read the trees</div>
+        <div class="explainer">
+          <div>
+            <h4><span class="line-sample"></span>Inherited</h4>
+            <p>Passed down from parent language to child, like Latin <i>vīnum</i> → Spanish <i>vino</i>. Words that share an ancestor this way are <b>cognates</b>.</p>
+          </div>
+          <div>
+            <h4><span class="line-sample bor"></span>Borrowed</h4>
+            <p>Taken from another language, often an unrelated one. Chinese 蜜 came from Tocharian even though Chinese isn't Indo-European.</p>
+          </div>
+          <div>
+            <h4><span class="line-sample unc"></span>Uncertain</h4>
+            <p>Clearly connected, but scholars disagree on which language borrowed from which.</p>
+          </div>
+        </div>
+      </section>
+
+      <section class="result" id="result" hidden>
+        <div class="card summary" id="summary"></div>
+
+        <div class="card journey">
+          <div class="card-head">
+            <h2>The word's journey</h2>
+            <p>From the oldest known form down to your word</p>
+          </div>
+          <ol class="steps" id="steps"></ol>
+        </div>
+
+        <div class="explore">
+          <div class="card tree-card">
+            <div class="tree-toolbar">
+              <h2 id="tree-title">Family tree</h2>
+              <div class="tools">
+                <label class="toggle"><input type="checkbox" id="living"> Living languages only</label>
+                <div class="zoom" role="group" aria-label="Zoom">
+                  <button id="zout" aria-label="Zoom out">−</button>
+                  <button id="zreset" aria-label="Reset zoom" style="font-size:12px;width:44px">100%</button>
+                  <button id="zin" aria-label="Zoom in">+</button>
+                </div>
+              </div>
+            </div>
+            <div class="legend">
+              <span><span class="line-sample"></span>inherited</span>
+              <span><span class="line-sample bor"></span>borrowed</span>
+              <span><span class="line-sample unc"></span>uncertain</span>
+              <span><span class="line-sample path"></span>your word's path</span>
+              <span><span class="dot hollow" style="--c:var(--faint)"></span>extinct †</span>
+            </div>
+            <div class="tree-scroll" id="tree-scroll"></div>
+          </div>
+          <aside class="card detail" id="detail" aria-live="polite"></aside>
+        </div>
+
+        <div class="card related" id="related"></div>
+      </section>
+    </main>
+
+    <footer>
+      Wordlines prototype · 4 hand-curated word families, based on Wiktionary and standard etymological references.
+      Dates are approximate, and disputed connections are marked as uncertain.
+    </footer>
+  </div>
+
+  <script src="data.js"></script>
+  <script src="app.js"></script>
+</body>
+</html>
