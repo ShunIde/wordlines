@@ -129,3 +129,4 @@ Known limitations of the live data so far:
 
 - [ ] **Separate a word's different histories.** "watch" currently opens on the timepiece, with no way to reach the verb. Add a switcher on the word's page, shown only when a word has more than one etymology, labelled by part of speech and meaning, with its own URL for each option. Split by etymology rather than part of speech: *run*'s noun and verb share one history, while *bank*'s nouns have several. Search stays at one result per word and language to avoid clutter. Descendant branches may need the etymology number stored on each link, which means a re-import.
 - [ ] **Optional language filter in search.** A dropdown set to "All languages" and remembered between visits, not a required first step.
+- [ ] **Remove "herb" words from the tea tree.** It contains words like Romanian *iarbă* and Spanish *yerba*, which look like descendants of Latin *herba* rather than tea. The cause hasn't been traced yet.
