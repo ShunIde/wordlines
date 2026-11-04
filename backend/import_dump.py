@@ -62,9 +62,13 @@ def clean(word):
     return unicodedata.normalize("NFC", word.strip().lstrip("*"))
 
 
-def loose_key(word):
+def strip_marks(word):
     decomposed = unicodedata.normalize("NFD", clean(word))
-    return unicodedata.normalize("NFC", "".join(c for c in decomposed if not unicodedata.combining(c))).casefold()
+    return unicodedata.normalize("NFC", "".join(c for c in decomposed if not unicodedata.combining(c)))
+
+
+def loose_key(word):
+    return strip_marks(word).casefold()
 
 
 def first_gloss(rec):

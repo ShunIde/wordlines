@@ -15,8 +15,9 @@ import json
 import os
 import sqlite3
 from collections import deque
+from functools import lru_cache
 
-from import_dump import loose_key
+from import_dump import loose_key, strip_marks
 
 ROOT = os.path.dirname(os.path.dirname(os.path.abspath(__file__)))
 DB = os.path.join(ROOT, "data", "wordlines.db")
@@ -49,6 +50,24 @@ class Trees:
         with open(languages, encoding="utf-8") as f:
             self.langs = json.load(f)
         self.db_lang_names = dict(self.con.execute("SELECT code, name FROM languages"))
+        self.page_spellings = lru_cache(maxsize=100_000)(self._page_spellings)
+
+    # ---------------------------------------------------------------- words
+    def _page_spellings(self, lang, key):
+        # No DISTINCT: it makes SQLite walk every word in the language through the entries_word index.
+        rows = self.con.execute("SELECT word FROM entries WHERE word_key = ? AND lang_code = ?", (key, lang))
+        return frozenset(strip_marks(word) for word, in rows)
+
+    def word_id(self, lang, word):
+        """The form that identifies a word within its language.
+
+        Marks are ignored, because links often spell a word with marks its page title drops (Latin mēl
+        lives on the page "mel"). Case is kept, because it can separate words: English "cia" is not
+        "CIA". A link in a case no page uses (Old English "september") goes to the page when only one
+        spelling exists.
+        """
+        pages = self.page_spellings(lang, loose_key(word))
+        return next(iter(pages)) if len(pages) == 1 else strip_marks(word)
 
     # ------------------------------------------------------------ languages
     def lang(self, code):
@@ -73,35 +92,37 @@ class Trees:
 
     # ---------------------------------------------------------------- graph
     def parents(self, lang, key):
+        # The *_key columns ignore case, so each query also returns the word's case variants.
         rows = self.con.execute(
-            "SELECT parent_lang, parent_key, parent_word, rel, source, entry_id FROM edges "
-            "WHERE child_lang = ? AND child_key = ?", (lang, key)).fetchall()
+            "SELECT parent_lang, parent_word, rel, source, entry_id, child_word FROM edges "
+            "WHERE child_lang = ? AND child_key = ?", (lang, loose_key(key))).fetchall()
+        rows = [(p_lang, self.word_id(p_lang, p_word), p_word, rel, source, entry_id)
+                for p_lang, p_word, rel, source, entry_id, c_word in rows if self.word_id(lang, c_word) == key]
         rows = [r for r in rows if (r[0], r[1]) != (lang, key)]
         rows.sort(key=lambda r: (SOURCE_RANK[r[4]], REL_RANK.get(r[3], 9), r[5]))
         return rows
 
     def children(self, lang, key):
-        return self.con.execute(
-            "SELECT child_lang, child_key, child_word, child_roman, rel, source FROM edges "
-            "WHERE parent_lang = ? AND parent_key = ?", (lang, key)).fetchall()
+        rows = self.con.execute(
+            "SELECT child_lang, child_word, child_roman, rel, source, parent_word FROM edges "
+            "WHERE parent_lang = ? AND parent_key = ?", (lang, loose_key(key))).fetchall()
+        return [(c_lang, self.word_id(c_lang, c_word), c_word, c_roman, rel, source)
+                for c_lang, c_word, c_roman, rel, source, p_word in rows if self.word_id(lang, p_word) == key]
 
     def exists(self, lang, key):
-        return bool(
-            self.con.execute("SELECT 1 FROM entries WHERE word_key = ? AND lang_code = ? LIMIT 1", (key, lang)).fetchone()
-            or self.con.execute("SELECT 1 FROM edges WHERE child_lang = ? AND child_key = ? LIMIT 1", (lang, key)).fetchone()
-            or self.con.execute("SELECT 1 FROM edges WHERE parent_lang = ? AND parent_key = ? LIMIT 1", (lang, key)).fetchone())
+        return bool(key in self.page_spellings(lang, loose_key(key)) or self.parents(lang, key) or self.children(lang, key))
 
     def entry_info(self, lang, key):
         """(display word, gloss, romanization) from the word's own entry, if it was imported."""
-        row = self.con.execute(
+        rows = self.con.execute(
             "SELECT word, gloss, roman FROM entries WHERE word_key = ? AND lang_code = ? "
-            "ORDER BY gloss IS NULL, pos = 'name', COALESCE(etym_num, 0), id LIMIT 1", (key, lang)).fetchone()
-        return row or (None, None, None)
+            "ORDER BY gloss IS NULL, pos = 'name', COALESCE(etym_num, 0), id", (loose_key(key), lang))
+        return next((row for row in rows if self.word_id(lang, row[0]) == key), (None, None, None))
 
     # ----------------------------------------------------------------- tree
     def build(self, lang, word):
         """Return {"tree", "title", "truncated", "families"} for the family of (lang, word), or None."""
-        target = (lang, loose_key(word))
+        target = (lang, self.word_id(lang, word))
         if not self.exists(*target):
             return None
 
@@ -230,15 +251,17 @@ class Trees:
         key = loose_key(text)
         if not key:
             return []
+        typed = strip_marks(text)
         hits = {}
 
         def add(lang, k, word, gloss, exact):
-            hit = hits.get((lang, k))
+            word_id = self.word_id(lang, word)
+            hit = hits.get((lang, word_id))
             if hit is None:
                 info = self.lang(lang)
-                hits[(lang, k)] = {"lc": lang, "k": word.lstrip("*"), "w": ("*" if info["reconstructed"] else "") + word.lstrip("*"),
-                                   "l": info["name"], "f": self.family_key(lang), "x": int(info["extinct"]),
-                                   "g": gloss or "", "exact": exact}
+                hits[(lang, word_id)] = {"lc": lang, "k": word.lstrip("*"), "w": ("*" if info["reconstructed"] else "") + word.lstrip("*"),
+                                         "l": info["name"], "f": self.family_key(lang), "x": int(info["extinct"]),
+                                         "g": gloss or "", "exact": exact, "same_case": word_id == typed}
             elif gloss and not hit["g"]:
                 hit["g"] = gloss
 
@@ -252,9 +275,9 @@ class Trees:
                 "ORDER BY length(child_key) LIMIT 200", (key, upper)):
             add(lang, k, word, None, k == key)
 
-        ranked = sorted(hits.values(), key=lambda h: (not h["exact"], h["x"], not h["g"], len(h["k"]), h["l"]))
+        ranked = sorted(hits.values(), key=lambda h: (not h["exact"], not h["same_case"], h["x"], not h["g"], len(h["k"]), h["l"]))
         for h in ranked:
-            del h["exact"]
+            del h["exact"], h["same_case"]
         return ranked[:limit]
 
 
