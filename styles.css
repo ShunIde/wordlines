@@ -214,9 +214,10 @@ body.has-result .hero h1, body.has-result .hero p.sub { display: none; }
 .legend { display: flex; flex-wrap: wrap; gap: 6px 18px; padding: 10px 22px; font-size: 12.5px; color: var(--muted); border-bottom: 1px solid var(--line); background: var(--surface-2); }
 .legend span { display: inline-flex; align-items: center; gap: 7px; }
 .legend .line-sample { width: 26px; }
+.legend .map-hint { margin-left: auto; }
 
-.tree-scroll { overflow: auto; max-height: 68vh; min-height: 300px; cursor: grab; overscroll-behavior: contain; }
-.tree-scroll.dragging { cursor: grabbing; user-select: none; }
+.tree-scroll { overflow: auto; max-height: 68vh; min-height: 300px; cursor: grab; overscroll-behavior: contain; user-select: none; }
+.tree-scroll.dragging { cursor: grabbing; }
 .tree-scroll svg { display: block; }
 .tree-scroll text { font-family: var(--sans); paint-order: stroke; stroke: var(--surface); stroke-width: 5px; stroke-linejoin: round; }
 .link { fill: none; stroke: var(--edge); stroke-width: 1.5; }

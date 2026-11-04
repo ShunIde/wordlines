@@ -378,10 +378,39 @@
   }
 
   $("#living").addEventListener("change", (e) => { state.livingOnly = e.target.checked; renderTree(true); });
-  const setZoom = (z) => { state.zoom = Math.min(1.6, Math.max(0.4, Math.round(z * 10) / 10)); renderTree(false); };
-  $("#zin").addEventListener("click", () => setZoom(state.zoom + 0.1));
-  $("#zout").addEventListener("click", () => setZoom(state.zoom - 0.1));
+
+  /** Zoom keeping the point under (clientX, clientY) in place; with no point, the middle of the view. */
+  function setZoom(z, clientX, clientY) {
+    const sc = $("#tree-scroll"), svg = sc.querySelector("svg");
+    const box = sc.getBoundingClientRect(), old = state.zoom;
+    const ax = clientX === undefined ? sc.clientWidth / 2 : clientX - box.left - sc.clientLeft;
+    const ay = clientY === undefined ? sc.clientHeight / 2 : clientY - box.top - sc.clientTop;
+    const cx = (sc.scrollLeft + ax) / old, cy = (sc.scrollTop + ay) / old;
+    state.zoom = Math.min(1.6, Math.max(0.4, z));
+    svg.setAttribute("width", treeGeom.W * state.zoom);
+    svg.setAttribute("height", treeGeom.H * state.zoom);
+    sc.scrollLeft = cx * state.zoom - ax;
+    sc.scrollTop = cy * state.zoom - ay;
+    $("#zreset").textContent = Math.round(state.zoom * 100) + "%";
+  }
+  const zoomStep = (d) => setZoom((Math.round(state.zoom * 10) + d) / 10);
+  $("#zin").addEventListener("click", () => zoomStep(1));
+  $("#zout").addEventListener("click", () => zoomStep(-1));
   $("#zreset").addEventListener("click", () => setZoom(1));
+
+  // Wheel and double-click zoom. Shift+wheel is left to the browser, which scrolls sideways.
+  (() => {
+    const sc = $("#tree-scroll");
+    sc.addEventListener("wheel", (e) => {
+      if (e.shiftKey) return;
+      e.preventDefault();
+      const delta = e.deltaMode === WheelEvent.DOM_DELTA_LINE ? e.deltaY * 16 : e.deltaY;
+      setZoom(state.zoom * Math.exp(-delta * (e.ctrlKey ? 0.01 : 0.002)), e.clientX, e.clientY); // ctrlKey: trackpad pinch
+    }, { passive: false });
+    sc.addEventListener("dblclick", (e) => {
+      if (!e.target.closest(".node")) setZoom(state.zoom * (e.shiftKey ? 1 / 1.5 : 1.5), e.clientX, e.clientY);
+    });
+  })();
 
   // drag-to-pan
   (() => {
