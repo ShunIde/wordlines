@@ -124,3 +124,8 @@ Known limitations of the live data so far:
 
 - **Phase 1, live data:** build word-family trees on demand from Wiktionary, using its etymology templates (`{{inh}}`, `{{bor}}`) and the Descendants sections on reconstruction pages, so any word works.
 - **Later ideas:** a map with a timeline of how a word spread, and a path finder that links any two words.
+
+## TODO
+
+- [ ] **Separate a word's different histories.** "watch" currently opens on the timepiece, with no way to reach the verb. Add a switcher on the word's page, shown only when a word has more than one etymology, labelled by part of speech and meaning, with its own URL for each option. Split by etymology rather than part of speech: *run*'s noun and verb share one history, while *bank*'s nouns have several. Search stays at one result per word and language to avoid clutter. Descendant branches may need the etymology number stored on each link, which means a re-import.
+- [ ] **Optional language filter in search.** A dropdown set to "All languages" and remembered between visits, not a required first step.
