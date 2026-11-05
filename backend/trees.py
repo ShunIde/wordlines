@@ -9,6 +9,10 @@ The database holds a graph, not a tree: the same link is often stated on both pa
 sometimes lists a word under several spellings of its parent (English "free" appears under Middle
 English fre, free, freo, vre...). Each word gets exactly one parent here, picked by how directly the
 link was stated (see SOURCE_RANK).
+
+Descendants lists can also claim words that don't belong: wiktextract splits the phrase Latin "herba
+thea" on the page thea into two descendants, and a Middle English word can list descendants of its
+homonyms. A word's own page outranks those claims (see Trees.link_rejected).
 """
 
 import json
@@ -51,6 +55,8 @@ class Trees:
             self.langs = json.load(f)
         self.db_lang_names = dict(self.con.execute("SELECT code, name FROM languages"))
         self.page_spellings = lru_cache(maxsize=100_000)(self._page_spellings)
+        self.stated_parents = lru_cache(maxsize=100_000)(self._stated_parents)
+        self.has_parents = lru_cache(maxsize=100_000)(self._has_parents)
 
     # ---------------------------------------------------------------- words
     def _page_spellings(self, lang, key):
@@ -91,23 +97,81 @@ class Trees:
         return self.family(code)[0]
 
     # ---------------------------------------------------------------- graph
+    def _stated_parents(self, lang, key):
+        """The direct parents named by the word's own page."""
+        rows = self.con.execute(
+            "SELECT parent_lang, parent_word, child_word FROM edges "
+            "WHERE child_lang = ? AND child_key = ? AND source = 'etym'", (lang, loose_key(key)))
+        stated = {(p_lang, self.word_id(p_lang, p_word)) for p_lang, p_word, c_word in rows
+                  if self.word_id(lang, c_word) == key}
+        stated.discard((lang, key))
+        return frozenset(stated)
+
+    def _has_parents(self, lang, key):
+        rows = self.con.execute("SELECT child_word FROM edges WHERE child_lang = ? AND child_key = ?",
+                                (lang, loose_key(key)))
+        return any(self.word_id(lang, c_word) == key for c_word, in rows)
+
+    def contradicted(self, p_lang, p_key, c_lang, c_key):
+        """Does the child's own page name a different origin than this Descendants-list link?
+
+        Disagreeing isn't always a contradiction. Proto-language pages spell the same root differently
+        (*ḱḗr, "kerd"), and a stated parent may be an inflected form with no history of its own (Latin
+        patrem for pater). So a link is only rejected when
+          - it stays inside one language, where a "descendant" is really a phrase part or derivation
+            (Latin thea -> herba, whose page says it comes from *gʰreh₁-), or
+          - the page names another word in the claimed parent's language, with its own history
+            (English see under Middle English son, when its page says Middle English seen).
+        If the stated parent belongs to the family too, the child is still reached through it.
+        """
+        stated = self.stated_parents(c_lang, c_key)
+        if not stated or (p_lang, p_key) in stated:
+            return False
+        if p_lang == c_lang:
+            return True
+        if self.lang(p_lang)["reconstructed"]:
+            return False
+        return any(q_lang == p_lang and self.has_parents(q_lang, q_key) for q_lang, q_key in stated)
+
+    def link_rejected(self, p_lang, p_key, c_lang, c_key, source, page_lang, page_word):
+        """Should this link be left out of trees? Only Descendants lists are ever questioned.
+
+        Besides a contradicted link itself, this drops what the same page nested under the rejected
+        word: Polish herbata, listed on the page thea under the "herba" half of "herba thea", is not
+        evidence that it descends from herba.
+        """
+        if source != "desc":
+            return False
+        if self.contradicted(p_lang, p_key, c_lang, c_key):
+            return True
+        if page_lang != p_lang:
+            return False
+        page_key = self.word_id(page_lang, page_word)
+        return page_key != p_key and self.contradicted(page_lang, page_key, p_lang, p_key)
+
     def parents(self, lang, key):
         # The *_key columns ignore case, so each query also returns the word's case variants.
         rows = self.con.execute(
-            "SELECT parent_lang, parent_word, rel, source, entry_id, child_word FROM edges "
-            "WHERE child_lang = ? AND child_key = ?", (lang, loose_key(key))).fetchall()
-        rows = [(p_lang, self.word_id(p_lang, p_word), p_word, rel, source, entry_id)
-                for p_lang, p_word, rel, source, entry_id, c_word in rows if self.word_id(lang, c_word) == key]
-        rows = [r for r in rows if (r[0], r[1]) != (lang, key)]
+            "SELECT e.parent_lang, e.parent_word, e.rel, e.source, e.entry_id, e.child_word, p.lang_code, p.word "
+            "FROM edges e JOIN entries p ON p.id = e.entry_id "
+            "WHERE e.child_lang = ? AND e.child_key = ?", (lang, loose_key(key))).fetchall()
+        rows = [(p_lang, self.word_id(p_lang, p_word), p_word, rel, source, entry_id, page_lang, page_word)
+                for p_lang, p_word, rel, source, entry_id, c_word, page_lang, page_word in rows
+                if self.word_id(lang, c_word) == key]
+        rows = [r[:6] for r in rows if (r[0], r[1]) != (lang, key)
+                and not self.link_rejected(r[0], r[1], lang, key, r[4], r[6], r[7])]
         rows.sort(key=lambda r: (SOURCE_RANK[r[4]], REL_RANK.get(r[3], 9), r[5]))
         return rows
 
     def children(self, lang, key):
         rows = self.con.execute(
-            "SELECT child_lang, child_word, child_roman, rel, source, parent_word FROM edges "
-            "WHERE parent_lang = ? AND parent_key = ?", (lang, loose_key(key))).fetchall()
-        return [(c_lang, self.word_id(c_lang, c_word), c_word, c_roman, rel, source)
-                for c_lang, c_word, c_roman, rel, source, p_word in rows if self.word_id(lang, p_word) == key]
+            "SELECT e.child_lang, e.child_word, e.child_roman, e.rel, e.source, e.parent_word, p.lang_code, p.word "
+            "FROM edges e JOIN entries p ON p.id = e.entry_id "
+            "WHERE e.parent_lang = ? AND e.parent_key = ?", (lang, loose_key(key))).fetchall()
+        rows = [(c_lang, self.word_id(c_lang, c_word), c_word, c_roman, rel, source, page_lang, page_word)
+                for c_lang, c_word, c_roman, rel, source, p_word, page_lang, page_word in rows
+                if self.word_id(lang, p_word) == key]
+        return [r[:6] for r in rows if not self.link_rejected(lang, key, r[0], r[1], r[5], r[6], r[7])]
 
     def exists(self, lang, key):
         return bool(key in self.page_spellings(lang, loose_key(key)) or self.parents(lang, key) or self.children(lang, key))

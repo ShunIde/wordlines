@@ -84,6 +84,7 @@ backend/import_dump.py       Phase 1: Wiktextract dump → SQLite
 backend/fetch_languages.py   language names, families and extinct status → data/languages.json
 backend/trees.py             builds a word's family tree (same node shape as data.js) and search
 backend/server.py            local server: the page plus /api/search and /api/tree
+backend/test_trees.py        tests on a small made-up database: python backend/test_trees.py
 ```
 
 Each node in `data.js` is created with `T(word, romanization, language, family, meaning, options, children)`. The options are:
@@ -114,9 +115,15 @@ python backend/server.py                   # open http://localhost:8000
 
 Served this way, search covers every imported word and trees are built on demand. Opening `index.html` directly still shows the four hand-curated Phase 0 families.
 
+A Descendants list can claim words that don't belong, so trees leave out a Descendants link when the word's own page contradicts it (`Trees.link_rejected`):
+- The link stays inside one language and the word's page names a different origin. Wiktextract splits Latin *herba thea* "herb tea" on the page *thea* into two descendants, which used to pull the whole *herba* family into the tea tree.
+- The word's page names a different word, with its own history, in the claimed parent's language. English *son* used to appear under "sun" because Old English *sunne* lists Middle English *sone*, whose own page says it comes from *sunu*.
+
+A proto-language parent can't trigger the second rule because those pages spell roots inconsistently, and neither can a stated parent with no history of its own, like the inflected Latin *patrem*.
+
 Known limitations of the live data so far:
 - No dates or notes. Those exist only in the curated families.
-- Words are identified by language and spelling, so homonyms can share a node. For example, Middle English *mede* means both "mead" and "meadow". The ancestor path follows the chain stated on the word's own page, which keeps it accurate, but side branches can pick up a homonym's descendants.
+- Words are identified by language and spelling, so homonyms can share a node. For example, Middle English *mede* means both "mead" and "meadow". The ancestor path follows the chain stated on the word's own page, and side branches drop links that the word's page contradicts, but a word whose page states no origin can still pick up a homonym's descendants.
 - Families larger than 700 words are trimmed to the 700 nearest the searched word's path.
 - Words in languages that weren't imported (for example Mandarin 蜜 in the default subset) only appear inside other words' Descendants lists, without a gloss.
 
@@ -129,4 +136,3 @@ Known limitations of the live data so far:
 
 - [ ] **Separate a word's different histories.** "watch" currently opens on the timepiece, with no way to reach the verb. Add a switcher on the word's page, shown only when a word has more than one etymology, labelled by part of speech and meaning, with its own URL for each option. Split by etymology rather than part of speech: *run*'s noun and verb share one history, while *bank*'s nouns have several. Search stays at one result per word and language to avoid clutter. Descendant branches may need the etymology number stored on each link, which means a re-import.
 - [ ] **Optional language filter in search.** A dropdown set to "All languages" and remembered between visits, not a required first step.
-- [ ] **Remove "herb" words from the tea tree.** It contains words like Romanian *iarbă* and Spanish *yerba*, which look like descendants of Latin *herba* rather than tea. The cause hasn't been traced yet.
