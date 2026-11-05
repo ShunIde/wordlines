@@ -104,6 +104,15 @@ body.has-result .hero h1, body.has-result .hero p.sub { display: none; }
 .search-box input::placeholder { color: var(--faint); font-weight: 400; }
 .kbd { font: 500 12px var(--sans); color: var(--faint); border: 1px solid var(--line); border-radius: 6px; padding: 2px 7px; margin-right: 6px; }
 
+.filters { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px 18px; margin-top: 12px; }
+.filters label { display: inline-flex; align-items: center; gap: 7px; min-width: 0; color: var(--muted); font-size: 13px; }
+.filters label[hidden] { display: none; }
+.filters select { max-width: 190px; min-height: 30px; padding: 3px 6px; color: var(--ink); background: var(--surface); border: 1px solid var(--line-strong);
+  border-radius: 8px; font: 500 13px var(--sans); cursor: pointer; }
+.filters select:focus-visible { outline: 2px solid var(--accent); outline-offset: 1px; }
+.filters select.on { border-color: var(--accent); background: var(--accent-soft); }
+.filters option, .filters optgroup { color: var(--ink); background: var(--surface); }
+
 .results { position: absolute; z-index: 20; left: 0; right: 0; top: calc(100% + 8px); margin: 0; padding: 6px;
   list-style: none; background: var(--surface); border: 1px solid var(--line); border-radius: 14px; box-shadow: var(--shadow); max-height: 420px; overflow: auto; }
 .results[hidden] { display: none; }
@@ -116,6 +125,7 @@ body.has-result .hero h1, body.has-result .hero p.sub { display: none; }
 .results .rds { grid-row: 1 / span 2; grid-column: 3; font-size: 12px; color: var(--faint); border: 1px solid var(--line); border-radius: 999px; padding: 2px 9px; white-space: nowrap; }
 .results .empty { display: block; color: var(--muted); cursor: default; padding: 14px; font-size: 14px; }
 .results .empty:hover { background: none; }
+.results .empty .link-btn { margin-left: 4px; }
 
 .try { display: flex; flex-wrap: wrap; justify-content: center; gap: 8px; margin-top: 16px; font-size: 14px; color: var(--muted); align-items: center; }
 .chip { display: inline-flex; align-items: center; gap: 7px; border: 1px solid var(--line); background: var(--surface);

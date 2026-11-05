@@ -21,6 +21,7 @@ An internet connection is only needed for the web fonts. Without one, the page f
 - Finds words in any script (蜜, мёд, ღვინო), with or without accents (`mez` finds *méz*), and by romanization (`chay` finds чай).
 - Also matches by meaning ("honey") and by language name ("Japanese").
 - Suggestions show each word's language, meaning and word family. Use ↑/↓ and Enter to pick one, and press `/` from anywhere on the page to jump to the search box.
+- An optional **language filter** sits under the search box, set to "All languages" by default. Your choice is remembered between visits.
 - Each word has its own URL (e.g. `index.html#honey.mandarin.mi`), so you can bookmark and share results.
 
 ### Summary
@@ -83,7 +84,7 @@ data.js      word-family trees and language-family list
 backend/import_dump.py       Phase 1: Wiktextract dump → SQLite
 backend/fetch_languages.py   language names, families and extinct status → data/languages.json
 backend/trees.py             builds a word's family tree (same node shape as data.js) and search
-backend/server.py            local server: the page plus /api/search and /api/tree
+backend/server.py            local server: the page plus /api/search, /api/tree and /api/languages
 backend/test_trees.py        tests on a small made-up database: python backend/test_trees.py
 ```
 
@@ -115,6 +116,8 @@ python backend/server.py                   # open http://localhost:8000
 
 Served this way, search covers every imported word and trees are built on demand. Opening `index.html` directly still shows the four hand-curated Phase 0 families.
 
+Search also gets a **part of speech filter**. Picking one shows only words with an entry in that part of speech, along with that entry's meaning, and opens the word on that etymology with its own URL. For example, *watch* as a verb (`#w/en/watch?pos=verb`) leads through Middle English *wacchen* rather than *wacche*. Words known only from links have no part of speech, so this filter leaves them out.
+
 A Descendants list can claim words that don't belong, so trees leave out a Descendants link when the word's own page contradicts it (`Trees.link_rejected`):
 - The link stays inside one language and the word's page names a different origin. Wiktextract splits Latin *herba thea* "herb tea" on the page *thea* into two descendants, which used to pull the whole *herba* family into the tea tree.
 - The word's page names a different word, with its own history, in the claimed parent's language. English *son* used to appear under "sun" because Old English *sunne* lists Middle English *sone*, whose own page says it comes from *sunu*.
@@ -134,5 +137,4 @@ Known limitations of the live data so far:
 
 ## TODO
 
-- [ ] **Separate a word's different histories.** "watch" currently opens on the timepiece, with no way to reach the verb. Add a switcher on the word's page, shown only when a word has more than one etymology, labelled by part of speech and meaning, with its own URL for each option. Split by etymology rather than part of speech: *run*'s noun and verb share one history, while *bank*'s nouns have several. Search stays at one result per word and language to avoid clutter. Descendant branches may need the etymology number stored on each link, which means a re-import.
-- [ ] **Optional language filter in search.** A dropdown set to "All languages" and remembered between visits, not a required first step.
+- [ ] **Separate a word's different histories.** The part of speech filter can reach the verb "watch", but without it the word opens on the timepiece, and it can't reach *bank*'s second noun. Add a switcher on the word's page, shown only when a word has more than one etymology, labelled by part of speech and meaning, with its own URL for each option. Split by etymology rather than part of speech: *run*'s noun and verb share one history, while *bank*'s nouns have several. Search stays at one result per word and language to avoid clutter. Descendant branches may need the etymology number stored on each link, which means a re-import.

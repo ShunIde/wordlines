@@ -5,8 +5,10 @@ Usage:
     python backend/server.py --port 9000
 
 API:
-    GET /api/search?q=honey               up to 9 matching words
-    GET /api/tree?lang=en&word=honey      the word's family tree (404 if the word isn't in the database)
+    GET /api/search?q=honey               up to 9 matching words; optional &lang=en and &pos=verb filters
+    GET /api/tree?lang=en&word=honey      the word's family tree (404 if the word isn't in the database);
+                                          optional &pos=verb starts from that part of speech's etymology
+    GET /api/languages                    every language with a searchable word
 """
 
 import argparse
@@ -33,9 +35,15 @@ db_lock = threading.Lock()  # one SQLite connection, used by one request at a ti
 
 
 @lru_cache(maxsize=256)
-def cached_tree(lang, word):
+def cached_tree(lang, word, pos):
     with db_lock:
-        return json.dumps(trees.build(lang, word), ensure_ascii=False)
+        return json.dumps(trees.build(lang, word, pos), ensure_ascii=False)
+
+
+@lru_cache(maxsize=1)
+def cached_languages():
+    with db_lock:
+        return json.dumps(trees.languages(), ensure_ascii=False)
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -44,11 +52,13 @@ class Handler(BaseHTTPRequestHandler):
         params = {k: v[0] for k, v in parse_qs(url.query).items()}
         if url.path == "/api/search":
             with db_lock:
-                hits = trees.search(params.get("q", ""))
+                hits = trees.search(params.get("q", ""), lang=params.get("lang"), pos=params.get("pos"))
             return self.send(200, json.dumps(hits, ensure_ascii=False), "application/json; charset=utf-8")
+        if url.path == "/api/languages":
+            return self.send(200, cached_languages(), "application/json; charset=utf-8")
         if url.path == "/api/tree":
             lang, word = params.get("lang", ""), params.get("word", "")
-            body = cached_tree(lang, word) if lang and word else "null"
+            body = cached_tree(lang, word, params.get("pos")) if lang and word else "null"
             if body == "null":
                 return self.send(404, json.dumps({"error": "word not found"}), "application/json; charset=utf-8")
             return self.send(200, body, "application/json; charset=utf-8")

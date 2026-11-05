@@ -14,7 +14,7 @@
   // Served by backend/server.py: search and trees come from the Wiktionary database.
   // Opened as a file: only the hand-curated families in data.js are available.
   const LIVE = location.protocol.startsWith("http");
-  const liveTarget = (lc, k) => `w/${lc}/${k}`;
+  const liveTarget = (lc, k, pos) => `w/${lc}/${k}${pos ? `?pos=${pos}` : ""}`;
   const targetOf = (n) => (n.ds.live ? liveTarget(n.lc, n.k) : n.id);
 
   /* ------------------------------------------------------------ indexing */
@@ -42,10 +42,11 @@
 
   const liveCache = new Map();
   let liveCount = 0;
-  async function loadLive(lc, k) {
-    const key = liveTarget(lc, k);
+  async function loadLive(lc, k, pos) {
+    const key = liveTarget(lc, k, pos);
     if (!liveCache.has(key)) {
-      liveCache.set(key, fetch(`/api/tree?lang=${encodeURIComponent(lc)}&word=${encodeURIComponent(k)}`).then(async (res) => {
+      const posParam = pos ? `&pos=${encodeURIComponent(pos)}` : "";
+      liveCache.set(key, fetch(`/api/tree?lang=${encodeURIComponent(lc)}&word=${encodeURIComponent(k)}${posParam}`).then(async (res) => {
         if (!res.ok) return null;
         const data = await res.json();
         Object.assign(FAMILIES, data.families);
@@ -73,14 +74,84 @@
   const state = { target: null, focus: null, livingOnly: false, zoom: 1 };
 
   /* -------------------------------------------------------------- search */
-  const q = $("#q"), results = $("#results");
+  const q = $("#q"), results = $("#results"), fLang = $("#f-lang"), fPos = $("#f-pos");
   let hits = [], active = -1;
+
+  // Part-of-speech codes in the database that are worth filtering by, with their labels.
+  const POS = {
+    noun: "noun", verb: "verb", adj: "adjective", adv: "adverb", name: "proper noun", pron: "pronoun",
+    prep: "preposition", conj: "conjunction", intj: "interjection", num: "numeral", det: "determiner",
+    particle: "particle", prefix: "prefix", suffix: "suffix", phrase: "phrase", root: "root",
+  };
+  const posLabel = (p) => POS[p] || p.replace(/_/g, " ");
+  const posPill = (list) => list.slice(0, 2).map(posLabel).join(" · ") + (list.length > 2 ? ` +${list.length - 2}` : "");
+
+  /* Filters. The language is the one remembered between visits: a part of speech left on from an
+     earlier search would quietly hide most results. Opened as a file, the data has no parts of speech. */
+  const LANG_KEY = "wordlines-search-language";
+  const loadLanguage = () => { try { return localStorage.getItem(LANG_KEY) || ""; } catch (e) { return ""; } };
+  const saveLanguage = (v) => { try { if (v) localStorage.setItem(LANG_KEY, v); else localStorage.removeItem(LANG_KEY); } catch (e) {} };
+  let langFilter = loadLanguage();
+
+  const markFilters = () => {
+    fLang.classList.toggle("on", !!fLang.value);
+    fPos.classList.toggle("on", !!fPos.value);
+  };
+  const options = (list) => list.map(([value, label]) => `<option value="${esc(value)}">${esc(label)}</option>`).join("");
+
+  async function initFilters() {
+    let groups;
+    if (LIVE) {
+      $("#f-pos-wrap").hidden = false;
+      fPos.insertAdjacentHTML("beforeend", options(Object.entries(POS)));
+      try {
+        const res = await fetch("/api/languages");
+        if (!res.ok) throw new Error(`languages failed: ${res.status}`);
+        const langs = await res.json();
+        const byName = [...langs].sort((a, b) => a.name.localeCompare(b.name));
+        groups = [["Most words", langs.slice(0, 12)], ["A–Z", byName]]
+          .map(([label, list]) => [label, list.map((l) => [l.code, l.name])]);
+      } catch (e) {
+        groups = [];
+      }
+    } else {
+      groups = [["A–Z", [...new Set(all.map((n) => n.l))].sort((a, b) => a.localeCompare(b)).map((l) => [l, l])]];
+    }
+    fLang.insertAdjacentHTML("beforeend", groups.map(([label, list]) => `<optgroup label="${esc(label)}">${options(list)}</optgroup>`).join(""));
+    fLang.value = langFilter;
+    if (fLang.value !== langFilter) { // the remembered language isn't available
+      fLang.value = "";
+      langFilter = "";
+      if (groups.length) saveLanguage(""); // keep it if the list just failed to load this time
+      if (q.value.trim()) renderResults();
+    }
+    markFilters();
+  }
+  function setLanguage(v) {
+    if (v === langFilter) return;
+    langFilter = v;
+    saveLanguage(v);
+    if (q.value.trim()) renderResults();
+  }
+  fLang.addEventListener("change", () => { markFilters(); setLanguage(fLang.value); });
+  fPos.addEventListener("change", () => { markFilters(); if (q.value.trim()) renderResults(); });
+  results.addEventListener("click", (e) => {
+    if (!e.target.closest("[data-clear-filters]")) return;
+    e.stopPropagation(); // the button is about to be replaced, which would read as a click outside the search
+    fLang.value = fPos.value = "";
+    markFilters();
+    langFilter = "";
+    saveLanguage("");
+    renderResults();
+    q.focus();
+  });
 
   function search(text) {
     const nq = norm(text);
     if (!nq) return [];
     const scored = [];
     for (const n of all) {
+      if (langFilter && n.l !== langFilter) continue;
       let s = 99;
       for (const f of [norm(n.w), norm(n.r)]) {
         if (!f) continue;
@@ -98,9 +169,13 @@
 
   let searchSeq = 0;
   async function liveSearch(text) {
-    const res = await fetch(`/api/search?q=${encodeURIComponent(text)}`);
+    const pos = fPos.value;
+    const params = new URLSearchParams({ q: text });
+    if (langFilter) params.set("lang", langFilter);
+    if (pos) params.set("pos", pos);
+    const res = await fetch(`/api/search?${params}`);
     if (!res.ok) throw new Error(`search failed: ${res.status}`);
-    return (await res.json()).map((h) => ({ ...h, target: liveTarget(h.lc, h.k), extra: "" }));
+    return (await res.json()).map((h) => ({ ...h, target: liveTarget(h.lc, h.k, pos), extra: posPill(h.pos) }));
   }
 
   async function renderResults() {
@@ -116,9 +191,14 @@
     }
     hits = found;
     active = hits.length ? 0 : -1;
+    const langName = langFilter ? fLang.selectedOptions[0]?.textContent || langFilter : "";
+    const filtered = fPos.value || langName;
+    const noMatch = `No ${esc(fPos.value ? posLabel(fPos.value) : "word")}${langName ? ` in ${esc(langName)}` : ""} matches this search.`;
     const empty = failed
       ? "Couldn't reach the Wordlines server. Is <code>backend/server.py</code> still running?"
-      : LIVE
+      : filtered
+        ? `${noMatch}<button class="link-btn" data-clear-filters>Clear filters</button>`
+        : LIVE
         ? "No match in the imported Wiktionary data. Try another spelling, or import more languages."
         : `No match in this prototype yet. It currently covers the <b>honey</b>, <b>tea</b>, <b>orange</b> and <b>wine</b> word families, about ${all.length} words in total.`;
     results.innerHTML = hits.length
@@ -134,7 +214,7 @@
     q.setAttribute("aria-expanded", "true");
     q.setAttribute("aria-activedescendant", active >= 0 ? `opt-${active}` : "");
   }
-  function closeResults() { results.hidden = true; q.setAttribute("aria-expanded", "false"); hits = []; active = -1; }
+  function closeResults() { searchSeq++; results.hidden = true; q.setAttribute("aria-expanded", "false"); hits = []; active = -1; }
   function moveActive(d) {
     if (!hits.length) return;
     active = (active + d + hits.length) % hits.length;
@@ -167,15 +247,16 @@
   let routeSeq = 0;
   async function route() {
     const seq = ++routeSeq;
+    closeResults();
     const id = decodeURIComponent(location.hash.slice(1));
     let n = byId.get(id);
-    const live = id.match(/^w\/([^/]+)\/(.+)$/);
+    const live = id.match(/^w\/([^/]+)\/(.+?)(?:\?pos=([a-z_]+))?$/);
     if (!n && live && LIVE) {
       q.value = live[2];
       q.blur();
       document.body.classList.add("loading");
       let ds = null, failed = false;
-      try { ds = await loadLive(live[1], live[2]); } catch (e) { failed = true; }
+      try { ds = await loadLive(live[1], live[2], live[3]); } catch (e) { failed = true; }
       document.body.classList.remove("loading");
       if (seq !== routeSeq) return; // the user navigated elsewhere while this loaded
       if (!ds) {
@@ -505,6 +586,7 @@
 
   /* ---------------------------------------------------------------- boot */
   renderLanding();
+  initFilters();
   const start = () => route();
   (document.fonts && document.fonts.ready ? document.fonts.ready : Promise.resolve()).then(start, start);
   window.addEventListener("resize", () => { if (state.target) scrollTreeTo(state.focus, false); });

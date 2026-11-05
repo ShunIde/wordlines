@@ -41,6 +41,14 @@
                  role="combobox" aria-expanded="false" aria-controls="results" aria-autocomplete="list">
           <span class="kbd">/</span>
         </div>
+        <div class="filters">
+          <label>Language
+            <select id="f-lang"><option value="">All languages</option></select>
+          </label>
+          <label id="f-pos-wrap" hidden>Part of speech
+            <select id="f-pos"><option value="">Any</option></select>
+          </label>
+        </div>
         <ul class="results" id="results" role="listbox" hidden></ul>
       </div>
       <div class="try" id="try"></div>

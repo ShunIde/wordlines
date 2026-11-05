@@ -176,16 +176,46 @@ class Trees:
     def exists(self, lang, key):
         return bool(key in self.page_spellings(lang, loose_key(key)) or self.parents(lang, key) or self.children(lang, key))
 
-    def entry_info(self, lang, key):
+    def entry_info(self, lang, key, pos=None):
         """(display word, gloss, romanization) from the word's own entry, if it was imported."""
         rows = self.con.execute(
-            "SELECT word, gloss, roman FROM entries WHERE word_key = ? AND lang_code = ? "
-            "ORDER BY gloss IS NULL, pos = 'name', COALESCE(etym_num, 0), id", (loose_key(key), lang))
+            "SELECT word, gloss, roman FROM entries WHERE word_key = ? AND lang_code = ? AND (? IS NULL OR pos = ?) "
+            "ORDER BY gloss IS NULL, pos = 'name', COALESCE(etym_num, 0), id", (loose_key(key), lang, pos, pos))
         return next((row for row in rows if self.word_id(lang, row[0]) == key), (None, None, None))
 
+    def history_entries(self, lang, key, pos):
+        """Ids of the entries sharing an etymology with the word's first entry in this part of speech.
+
+        A part of speech can sit in an etymology whose links were stated in another section: "bank" the
+        verb has the same etymology number as "bank" the noun, and only the noun carries the template.
+        """
+        rows = self.con.execute(
+            "SELECT id, word, pos, etym_num FROM entries WHERE word_key = ? AND lang_code = ? ORDER BY id",
+            (loose_key(key), lang)).fetchall()
+        rows = [r for r in rows if self.word_id(lang, r[1]) == key]
+        first = next((r for r in rows if r[2] == pos), None)
+        if first is None:
+            return frozenset()
+        if first[3] is None:
+            return frozenset(r[0] for r in rows if r[2] == pos)
+        return frozenset(r[0] for r in rows if r[3] == first[3])
+
+    def languages(self):
+        """Every language with a searchable word: [{"code", "name", "words"}], most words first."""
+        counts = dict(self.con.execute("SELECT lang_code, count(*) FROM entries GROUP BY lang_code"))
+        for code, n in self.con.execute("SELECT child_lang, count(*) FROM edges GROUP BY child_lang"):
+            counts[code] = counts.get(code, 0) + n
+        out = [{"code": code, "name": self.lang(code)["name"], "words": n} for code, n in counts.items()]
+        out.sort(key=lambda l: (-l["words"], l["name"]))
+        return out
+
     # ----------------------------------------------------------------- tree
-    def build(self, lang, word):
-        """Return {"tree", "title", "truncated", "families"} for the family of (lang, word), or None."""
+    def build(self, lang, word, pos=None):
+        """Return {"tree", "title", "truncated", "families"} for the family of (lang, word), or None.
+
+        With a part of speech, the walk up starts from that part of speech's etymology, and the word
+        is shown with its gloss: "watch" the verb leads to Middle English wacchen, not wacche.
+        """
         target = (lang, self.word_id(lang, word))
         if not self.exists(*target):
             return None
@@ -199,13 +229,13 @@ class Trees:
         display = {target: word}
         seen = {target}
         node = target
-        chain_entry = None
+        chain_entries = self.history_entries(*target, pos) if pos else frozenset()
         while len(up) < MAX_DEPTH:
             options = []
             for p_lang, p_key, p_word, rel, source, entry_id in self.parents(*node):
                 if (p_lang, p_key) in seen:
                     continue
-                in_chain = source != "desc" and entry_id == chain_entry
+                in_chain = source != "desc" and entry_id in chain_entries
                 if not in_chain and (p_lang == node[0] or (rel == "der" and node != target)):
                     continue
                 options.append((not in_chain, SOURCE_RANK[source], REL_RANK.get(rel, 9), entry_id,
@@ -213,7 +243,7 @@ class Trees:
             if not options:
                 break
             *_, entry_id, parent, p_word, rel, source = min(options)
-            chain_entry = entry_id if source != "desc" else None
+            chain_entries = frozenset([entry_id]) if source != "desc" else frozenset()
             display.setdefault(parent, p_word)
             up_parent[node] = (parent, rel)
             seen.add(parent)
@@ -279,6 +309,8 @@ class Trees:
             n_lang, n_key = node
             info = self.lang(n_lang)
             e_word, gloss, e_roman = self.entry_info(n_lang, n_key)
+            if pos and node == target:
+                gloss = self.entry_info(n_lang, n_key, pos)[1] or gloss
             w = display.get(node) or e_word or n_key
             if info["reconstructed"]:
                 w = "*" + w.lstrip("*")
@@ -311,33 +343,54 @@ class Trees:
         return {"title": tree["w"], "tree": tree, "truncated": truncated, "families": families}
 
     # --------------------------------------------------------------- search
-    def search(self, text, limit=9):
+    def search(self, text, limit=9, lang=None, pos=None):
+        """Words starting with `text`, one per word and language, optionally in one language or part of speech.
+
+        Each hit lists its parts of speech in "pos". Words known only from links have none, so a part
+        of speech filter leaves them out.
+        """
         key = loose_key(text)
         if not key:
             return []
         typed = strip_marks(text)
         hits = {}
 
-        def add(lang, k, word, gloss, exact):
-            word_id = self.word_id(lang, word)
-            hit = hits.get((lang, word_id))
+        def add(h_lang, k, word, gloss, exact, h_pos=None):
+            word_id = self.word_id(h_lang, word)
+            hit = hits.get((h_lang, word_id))
             if hit is None:
-                info = self.lang(lang)
-                hits[(lang, word_id)] = {"lc": lang, "k": word.lstrip("*"), "w": ("*" if info["reconstructed"] else "") + word.lstrip("*"),
-                                         "l": info["name"], "f": self.family_key(lang), "x": int(info["extinct"]),
-                                         "g": gloss or "", "exact": exact, "same_case": word_id == typed}
+                info = self.lang(h_lang)
+                hit = hits[(h_lang, word_id)] = {
+                    "lc": h_lang, "k": word.lstrip("*"), "w": ("*" if info["reconstructed"] else "") + word.lstrip("*"),
+                    "l": info["name"], "f": self.family_key(h_lang), "x": int(info["extinct"]),
+                    "g": gloss or "", "pos": [], "exact": exact, "same_case": word_id == typed}
             elif gloss and not hit["g"]:
                 hit["g"] = gloss
+            if h_pos and h_pos not in hit["pos"]:
+                hit["pos"].append(h_pos)
 
         upper = key + "￿"
-        for lang, k, word, gloss in self.con.execute(
-                "SELECT lang_code, word_key, word, gloss FROM entries WHERE word_key >= ? AND word_key < ? "
-                "ORDER BY length(word_key), gloss IS NULL LIMIT 200", (key, upper)):
-            add(lang, k, word, gloss, k == key)
-        for lang, k, word in self.con.execute(
-                "SELECT DISTINCT child_lang, child_key, child_word FROM edges WHERE child_key >= ? AND child_key < ? "
-                "ORDER BY length(child_key) LIMIT 200", (key, upper)):
-            add(lang, k, word, None, k == key)
+        where, args = "word_key >= ? AND word_key < ?", [key, upper]
+        if lang:
+            where += " AND lang_code = ?"
+            args.append(lang)
+        if pos:
+            where += " AND pos = ?"
+            args.append(pos)
+        # Left to itself, SQLite walks every word of the language for a language filter (9s for "a" in English).
+        for h_lang, k, word, gloss, h_pos in self.con.execute(
+                f"SELECT lang_code, word_key, word, gloss, pos FROM entries INDEXED BY entries_key WHERE {where} "
+                "ORDER BY length(word_key), gloss IS NULL, COALESCE(etym_num, 0), id LIMIT 200", args):
+            add(h_lang, k, word, gloss, k == key, h_pos)
+        if not pos:
+            where, args = "child_key >= ? AND child_key < ?", [key, upper]
+            if lang:
+                where += " AND child_lang = ?"
+                args.append(lang)
+            for h_lang, k, word in self.con.execute(
+                    f"SELECT DISTINCT child_lang, child_key, child_word FROM edges WHERE {where} "
+                    "ORDER BY length(child_key) LIMIT 200", args):
+                add(h_lang, k, word, None, k == key)
 
         ranked = sorted(hits.values(), key=lambda h: (not h["exact"], not h["same_case"], h["x"], not h["g"], len(h["k"]), h["l"]))
         for h in ranked:
