@@ -14,6 +14,7 @@ API:
 import argparse
 import json
 import os
+import socket
 import threading
 from functools import lru_cache
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
@@ -44,6 +45,10 @@ def cached_tree(lang, word, pos):
 def cached_languages():
     with db_lock:
         return json.dumps(trees.languages(), ensure_ascii=False)
+
+
+class IPv6Server(ThreadingHTTPServer):
+    address_family = socket.AF_INET6
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -86,10 +91,18 @@ def main():
     p = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
     p.add_argument("--port", type=int, default=8000)
     a = p.parse_args()
-    server = ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    servers = [ThreadingHTTPServer(("127.0.0.1", a.port), Handler)]
+    # Windows tries IPv6 first for "localhost", and waits ~230ms per request for ::1 to refuse when
+    # nothing listens there. Listening on both loopback addresses keeps it local-only and quick.
+    try:
+        servers.append(IPv6Server(("::1", a.port), Handler))
+    except OSError:
+        pass  # no IPv6 on this machine, so browsers won't try it either
+    for server in servers[1:]:
+        threading.Thread(target=server.serve_forever, daemon=True).start()
     print(f"Wordlines running at http://localhost:{a.port}  (Ctrl+C to stop)")
     try:
-        server.serve_forever()
+        servers[0].serve_forever()
     except KeyboardInterrupt:
         pass
 
