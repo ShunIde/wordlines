@@ -103,6 +103,7 @@ curl -o data/raw-wiktextract-data.jsonl.gz https://kaikki.org/dictionary/raw-wik
 python backend/import_dump.py              # English, Middle/Old English, Latin, Ancient Greek + all proto-languages
 python backend/import_dump.py --langs en fr de zh    # a different subset (proto-languages are always kept)
 python backend/import_dump.py --all        # everything
+python backend/import_dump.py --add-search-indexes   # add the search indexes to an older database, no re-import
 ```
 
 This builds `data/wordlines.db`, a SQLite file with `entries` (words with gloss and part of speech) and `edges` (parent → child links marked `inh`, `bor`, `der` or `unc`). Links come from each entry's etymology templates and its Descendants section. `data/` is gitignored.

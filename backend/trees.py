@@ -57,6 +57,13 @@ class Trees:
         self.page_spellings = lru_cache(maxsize=100_000)(self._page_spellings)
         self.stated_parents = lru_cache(maxsize=100_000)(self._stated_parents)
         self.has_parents = lru_cache(maxsize=100_000)(self._has_parents)
+        indexes = {name for name, in self.con.execute("SELECT name FROM sqlite_master WHERE type = 'index'")}
+        if not {"entries_len", "edges_len"} <= indexes:
+            raise SystemExit(f"{db} is missing the search indexes. Add them with:\n"
+                             "    python backend/import_dump.py --add-search-indexes")
+        # The longest keys bound search's walk through word lengths.
+        self.max_word_len = self.con.execute("SELECT max(length(word_key)) FROM entries").fetchone()[0] or 0
+        self.max_child_len = self.con.execute("SELECT max(length(child_key)) FROM edges").fetchone()[0] or 0
 
     # ---------------------------------------------------------------- words
     def _page_spellings(self, lang, key):
@@ -343,6 +350,19 @@ class Trees:
         return {"title": tree["w"], "tree": tree, "truncated": truncated, "families": families}
 
     # --------------------------------------------------------------- search
+    def _shortest(self, sql, args, min_len, max_len, want=200):
+        """Up to `want` rows of `sql`, shortest keys first, asking for one key length at a time.
+
+        `sql` takes the length as its first parameter and the remaining row count as its last. Sorting
+        the whole prefix range by length instead takes about a second for a one-letter search.
+        """
+        rows = []
+        for n in range(min_len, max_len + 1):
+            rows += self.con.execute(sql, [n, *args, want - len(rows)]).fetchall()
+            if len(rows) >= want:
+                break
+        return rows
+
     def search(self, text, limit=9, lang=None, pos=None):
         """Words starting with `text`, one per word and language, optionally in one language or part of speech.
 
@@ -377,19 +397,20 @@ class Trees:
         if pos:
             where += " AND pos = ?"
             args.append(pos)
-        # Left to itself, SQLite walks every word of the language for a language filter (9s for "a" in English).
-        for h_lang, k, word, gloss, h_pos in self.con.execute(
-                f"SELECT lang_code, word_key, word, gloss, pos FROM entries INDEXED BY entries_key WHERE {where} "
-                "ORDER BY length(word_key), gloss IS NULL, COALESCE(etym_num, 0), id LIMIT 200", args):
+        for h_lang, k, word, gloss, h_pos in self._shortest(
+                "SELECT lang_code, word_key, word, gloss, pos FROM entries INDEXED BY entries_len "
+                f"WHERE length(word_key) = ? AND {where} ORDER BY gloss IS NULL, COALESCE(etym_num, 0), id LIMIT ?",
+                args, len(key), self.max_word_len):
             add(h_lang, k, word, gloss, k == key, h_pos)
         if not pos:
             where, args = "child_key >= ? AND child_key < ?", [key, upper]
             if lang:
                 where += " AND child_lang = ?"
                 args.append(lang)
-            for h_lang, k, word in self.con.execute(
-                    f"SELECT DISTINCT child_lang, child_key, child_word FROM edges WHERE {where} "
-                    "ORDER BY length(child_key) LIMIT 200", args):
+            for h_lang, k, word in self._shortest(
+                    "SELECT DISTINCT child_lang, child_key, child_word FROM edges INDEXED BY edges_len "
+                    f"WHERE length(child_key) = ? AND {where} LIMIT ?",
+                    args, len(key), self.max_child_len):
                 add(h_lang, k, word, None, k == key)
 
         ranked = sorted(hits.values(), key=lambda h: (not h["exact"], not h["same_case"], h["x"], not h["g"], len(h["k"]), h["l"]))

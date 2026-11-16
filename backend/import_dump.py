@@ -213,12 +213,18 @@ CREATE TABLE edges (
 );
 """
 
-INDEXES = """
+# Search reads the shortest matching words first, so it seeks these one word length at a time instead
+# of sorting every word that starts with the typed text (227,000 for "a").
+SEARCH_INDEXES = """
+CREATE INDEX IF NOT EXISTS entries_len ON entries (length(word_key), word_key, lang_code);
+CREATE INDEX IF NOT EXISTS edges_len ON edges (length(child_key), child_key, child_lang);
+"""
+
+INDEXES = SEARCH_INDEXES + """
 CREATE INDEX entries_word ON entries (lang_code, word);
 CREATE INDEX entries_key ON entries (word_key, lang_code);
 CREATE INDEX edges_child ON edges (child_lang, child_key);
 CREATE INDEX edges_parent ON edges (parent_lang, parent_key);
-CREATE INDEX edges_child_key ON edges (child_key);
 """
 
 
@@ -299,7 +305,15 @@ def main():
     p.add_argument("--langs", nargs="+", default=DEFAULT_LANGS,
                    help=f"language codes to import besides proto-languages (default: {' '.join(DEFAULT_LANGS)})")
     p.add_argument("--all", action="store_true", help="import every language")
+    p.add_argument("--add-search-indexes", action="store_true",
+                   help="add the search indexes to an existing --db without re-importing")
     a = p.parse_args()
+    if a.add_search_indexes:
+        con = sqlite3.connect(a.db)
+        con.executescript(SEARCH_INDEXES)
+        con.close()
+        print(f"search indexes ready in {a.db}")
+        return
     run(a.dump, a.db, None if a.all else set(a.langs))
 
 

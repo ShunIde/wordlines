@@ -168,23 +168,28 @@
   }
 
   let searchSeq = 0;
-  async function liveSearch(text) {
+  let searchAbort = null; // the live search still in flight, cancelled when a newer one starts
+  let typingTimer = 0;
+  async function liveSearch(text, signal) {
     const pos = fPos.value;
     const params = new URLSearchParams({ q: text });
     if (langFilter) params.set("lang", langFilter);
     if (pos) params.set("pos", pos);
-    const res = await fetch(`/api/search?${params}`);
+    const res = await fetch(`/api/search?${params}`, { signal });
     if (!res.ok) throw new Error(`search failed: ${res.status}`);
     return (await res.json()).map((h) => ({ ...h, target: liveTarget(h.lc, h.k, pos), extra: posPill(h.pos) }));
   }
 
   async function renderResults() {
+    clearTimeout(typingTimer);
     const text = q.value.trim();
     if (!text) { closeResults(); return; }
     const seq = ++searchSeq;
     let found, failed = false;
     if (LIVE) {
-      try { found = await liveSearch(text); } catch (e) { found = []; failed = true; }
+      searchAbort?.abort();
+      const ctrl = searchAbort = new AbortController();
+      try { found = await liveSearch(text, ctrl.signal); } catch (e) { found = []; failed = true; }
       if (seq !== searchSeq) return; // a newer keystroke already answered
     } else {
       found = search(text);
@@ -214,7 +219,13 @@
     q.setAttribute("aria-expanded", "true");
     q.setAttribute("aria-activedescendant", active >= 0 ? `opt-${active}` : "");
   }
-  function closeResults() { searchSeq++; results.hidden = true; q.setAttribute("aria-expanded", "false"); hits = []; active = -1; }
+  function cancelSearch() {
+    clearTimeout(typingTimer);
+    searchAbort?.abort();
+    searchAbort = null;
+    searchSeq++;
+  }
+  function closeResults() { cancelSearch(); results.hidden = true; q.setAttribute("aria-expanded", "false"); hits = []; active = -1; }
   function moveActive(d) {
     if (!hits.length) return;
     active = (active + d + hits.length) % hits.length;
@@ -223,7 +234,14 @@
     q.setAttribute("aria-activedescendant", `opt-${active}`);
   }
 
-  q.addEventListener("input", renderResults);
+  // Live search waits for a pause in typing, so a burst of keystrokes sends one request rather than
+  // queueing a search per letter on the server.
+  q.addEventListener("input", () => {
+    if (!LIVE) return renderResults();
+    clearTimeout(typingTimer);
+    if (!q.value.trim()) return closeResults();
+    typingTimer = setTimeout(renderResults, 120);
+  });
   q.addEventListener("focus", () => q.value.trim() && renderResults());
   q.addEventListener("keydown", (e) => {
     if (e.key === "ArrowDown") { e.preventDefault(); moveActive(1); }
